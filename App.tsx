@@ -1,9 +1,82 @@
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { generateAiBackground } from './services/geminiService';
-import { ChromaSettings, ImageAdjustments, TransformSettings, ExportSettings, ProcessingStatus } from './types';
-import { Button } from './components/Button';
+import { GoogleGenAI } from "@google/genai";
+
+// --- Types & Interfaces ---
+
+export interface ChromaSettings {
+  similarity: number;
+  smoothness: number;
+  spill: number;
+  keyColor: string;
+}
+
+export interface ImageAdjustments {
+  exposure: number;
+  contrast: number;
+  saturation: number;
+  warmth: number;
+  tint: number;
+  brightness: number;
+  blackPoint: number;
+}
+
+export interface CropRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface TransformSettings {
+  rotate: number;
+  vertical: number;
+  horizontal: number;
+  scale: number;
+  panX: number;
+  panY: number;
+  crop: CropRect;
+}
+
+export enum ProcessingStatus {
+  IDLE = 'IDLE',
+  PROCESSING = 'PROCESSING',
+  GENERATING_BG = 'GENERATING_BG',
+  CAPTURING = 'CAPTURING',
+  DONE = 'DONE',
+  ERROR = 'ERROR'
+}
+
+// --- Gemini Service ---
+
+const generateAiBackground = async (prompt: string): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [{ text: prompt }]
+      }
+    });
+
+    const candidates = response.candidates;
+    if (candidates && candidates.length > 0) {
+      const parts = candidates[0].content.parts;
+      for (const part of parts) {
+        if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
+          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        }
+      }
+    }
+    throw new Error("No image generated.");
+  } catch (error) {
+    console.error("Gemini Error:", error);
+    throw error;
+  }
+};
 
 // --- Helpers ---
+
 const hexToRgb = (hex: string) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
   return result ? {
@@ -13,14 +86,30 @@ const hexToRgb = (hex: string) => {
   } : { r: 0, g: 255, b: 0 };
 };
 
-// --- Custom Streamlit-style Components ---
+// --- Streamlit UI Components ---
 
-const StHeader: React.FC<{ title: string; sub?: string }> = ({ title, sub }) => (
-  <div className="mb-6">
-    <h1 className="text-3xl font-bold text-white mb-2">{title}</h1>
-    {sub && <p className="text-gray-400 text-sm">{sub}</p>}
-  </div>
-);
+const Button: React.FC<{
+  children: React.ReactNode;
+  onClick?: () => void;
+  variant?: 'primary' | 'secondary' | 'danger';
+  className?: string;
+  disabled?: boolean;
+}> = ({ children, onClick, variant = 'primary', className = '', disabled }) => {
+  const variants = {
+    primary: "bg-[#ff4b4b] text-white hover:bg-[#ff3333]",
+    secondary: "bg-[#31333f] text-[#fafafa] hover:bg-[#4b4d5a]",
+    danger: "bg-transparent border border-red-500 text-red-500 hover:bg-red-500 hover:text-white"
+  };
+  return (
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      className={`px-4 py-2 rounded text-xs font-semibold transition-all disabled:opacity-50 ${variants[variant]} ${className}`}
+    >
+      {children}
+    </button>
+  );
+};
 
 const StExpander: React.FC<{
   label: string;
@@ -28,36 +117,20 @@ const StExpander: React.FC<{
   onToggle: () => void;
   children: React.ReactNode;
   resetAction?: () => void;
-}> = ({ label, isOpen, onToggle, children, resetAction }) => {
-  return (
-    <div className="border border-[#31333f] rounded-lg mb-4 bg-[#161b22] overflow-hidden">
-      <div 
-        className="flex items-center justify-between p-3 cursor-pointer hover:bg-[#1f242d] transition-colors select-none"
-        onClick={onToggle}
-      >
-        <div className="flex items-center gap-3">
-           <span className={`text-gray-500 text-[10px] transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}>
-             ▼
-           </span>
-           <span className="text-sm font-semibold text-white">{label}</span>
-        </div>
-        {resetAction && (
-          <button 
-            onClick={(e) => { e.stopPropagation(); resetAction(); }} 
-            className="text-[10px] text-[#ff4b4b] hover:underline font-bold uppercase tracking-tighter"
-          >
-            Reset
-          </button>
-        )}
+}> = ({ label, isOpen, onToggle, children, resetAction }) => (
+  <div className="border border-[#31333f] rounded mb-4 bg-[#262730]">
+    <div className="flex items-center justify-between p-3 cursor-pointer select-none" onClick={onToggle}>
+      <div className="flex items-center gap-3">
+        <span className={`text-[10px] transition-transform ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+        <span className="text-sm font-semibold">{label}</span>
       </div>
-      {isOpen && (
-        <div className="p-4 border-t border-[#31333f] space-y-4 animate-in fade-in slide-in-from-top-1">
-          {children}
-        </div>
+      {resetAction && (
+        <button onClick={(e) => { e.stopPropagation(); resetAction(); }} className="text-[10px] text-[#ff4b4b] hover:underline uppercase">Reset</button>
       )}
     </div>
-  );
-};
+    {isOpen && <div className="p-4 border-t border-[#31333f] space-y-4">{children}</div>}
+  </div>
+);
 
 const StSlider: React.FC<{
   label: string;
@@ -65,441 +138,327 @@ const StSlider: React.FC<{
   min: number;
   max: number;
   step?: number;
-  displayMultiplier?: number;
   unit?: string;
   onChange: (val: number) => void;
-}> = ({ label, value, min, max, step = 1, displayMultiplier = 1, unit = "", onChange }) => {
-  const displayValue = Math.round(value * displayMultiplier);
-  return (
-    <div className="space-y-1.5 mb-2">
-      <div className="flex justify-between items-center">
-        <label className="text-xs font-medium text-gray-300">{label}</label>
-        <span className="text-xs mono text-[#ff4b4b] font-semibold">{displayValue}{unit}</span>
-      </div>
-      <input 
-        type="range" 
-        min={min} max={max} step={step}
-        value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="w-full h-1 bg-[#31333f] rounded-lg appearance-none cursor-pointer accent-[#ff4b4b]"
-      />
+}> = ({ label, value, min, max, step = 1, unit = "", onChange }) => (
+  <div className="space-y-1">
+    <div className="flex justify-between">
+      <label className="text-xs font-medium text-gray-300">{label}</label>
+      <span className="text-xs text-[#ff4b4b] font-mono">{value}{unit}</span>
     </div>
-  );
-};
+    <input
+      type="range" min={min} max={max} step={step} value={value}
+      onChange={(e) => onChange(parseFloat(e.target.value))}
+      className="w-full h-1 bg-[#31333f] rounded appearance-none cursor-pointer accent-[#ff4b4b]"
+    />
+  </div>
+);
+
+// --- Main Application ---
 
 const App: React.FC = () => {
-  // --- State ---
   const [foregroundSrc, setForegroundSrc] = useState<string | null>(null);
   const [backgroundSrc, setBackgroundSrc] = useState<string | null>(null);
-  const [viewportZoom, setViewportZoom] = useState(0.85);
-  
-  const [expanders, setExpanders] = useState({
-    assets: true,
-    chroma: true,
-    adjustments: true,
-    geometry: true,
-    export: false
-  });
-  
-  const toggleExpander = (key: keyof typeof expanders) => {
-    setExpanders(p => ({ ...p, [key]: !p[key] }));
-  };
-
-  const [chromaSettings, setChromaSettings] = useState<ChromaSettings>({
-    similarity: 0.35, smoothness: 0.1, spill: 0.1, keyColor: '#00b140'
-  });
-
-  const [imageAdjustments, setImageAdjustments] = useState<ImageAdjustments>({
-    exposure: 0, brilliance: 0, highlights: 0, shadows: 0, contrast: 0,
-    brightness: 0, blackPoint: 0, saturation: 0, warmth: 0, tint: 0, sharpness: 0
-  });
-
-  const [transformSettings, setTransformSettings] = useState<TransformSettings>({
-    rotate: 0, vertical: 0, horizontal: 0, scale: 1.0, panX: 0, panY: 0,
-    crop: { x: 0, y: 0, width: 1, height: 1 }
-  });
-
-  const [isCropping, setIsCropping] = useState(false);
-  const [aiPrompt, setAiPrompt] = useState('');
   const [status, setStatus] = useState<ProcessingStatus>(ProcessingStatus.IDLE);
-  const [exportSettings, setExportSettings] = useState<ExportSettings>({
-    format: 'image/jpeg', quality: 0.9, scale: 1.0
-  });
+  const [viewportZoom, setViewportZoom] = useState(0.85);
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
 
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-  const [downloadSize, setDownloadSize] = useState<string>('');
+  const [expanders, setExpanders] = useState({ assets: true, chroma: true, adjust: true, geo: true, export: false });
+  const [chroma, setChroma] = useState<ChromaSettings>({ similarity: 0.35, smoothness: 0.1, spill: 0.1, keyColor: '#00b140' });
+  const [adjust, setAdjust] = useState<ImageAdjustments>({ exposure: 0, contrast: 0, saturation: 0, warmth: 0, tint: 0, brightness: 0, blackPoint: 0 });
+  const [transform, setTransform] = useState<TransformSettings>({ rotate: 0, vertical: 0, horizontal: 0, scale: 1.0, panX: 0, panY: 0, crop: { x: 0, y: 0, width: 1, height: 1 } });
+  const [isCropping, setIsCropping] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const bufferCanvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
-  const mainAreaRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [fgImg, setFgImg] = useState<HTMLImageElement | null>(null);
   const [bgImg, setBgImg] = useState<HTMLImageElement | null>(null);
 
-  // --- Image Upload Handlers ---
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>, isForeground: boolean) => {
+  // --- Handlers ---
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, isFg: boolean) => {
     const file = e.target.files?.[0];
     if (file) {
       const url = URL.createObjectURL(file);
       const img = new Image();
       img.onload = () => {
-        if (isForeground) { setFgImg(img); setForegroundSrc(url); }
+        if (isFg) { setFgImg(img); setForegroundSrc(url); }
         else { setBgImg(img); setBackgroundSrc(url); }
       };
       img.src = url;
     }
   };
 
-  const handleGenerateBackground = async () => {
-    if (!aiPrompt.trim()) return;
-    setStatus(ProcessingStatus.GENERATING_BG);
+  const startCamera = async () => {
     try {
-      const base64Image = await generateAiBackground(aiPrompt);
-      const img = new Image();
-      img.onload = () => {
-        setBgImg(img);
-        setBackgroundSrc(base64Image);
-        setStatus(ProcessingStatus.IDLE);
-      };
-      img.src = base64Image;
-    } catch (error) {
-      setStatus(ProcessingStatus.ERROR);
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        setIsCameraActive(true);
+      }
+    } catch (err) {
+      console.error("Camera error:", err);
+      alert("Could not access camera.");
     }
   };
 
-  // --- Zoom Management (Ctrl + Wheel) ---
-  useEffect(() => {
-    const handleWheel = (e: WheelEvent) => {
-      if (e.ctrlKey) {
-        e.preventDefault();
-        const delta = -e.deltaY;
-        setViewportZoom(prev => Math.min(Math.max(0.1, prev + delta * 0.002), 5));
-      }
-    };
-    const area = mainAreaRef.current;
-    area?.addEventListener('wheel', handleWheel, { passive: false });
-    return () => area?.removeEventListener('wheel', handleWheel);
-  }, []);
+  const capturePhoto = () => {
+    if (videoRef.current) {
+      const video = videoRef.current;
+      const capCanvas = document.createElement('canvas');
+      capCanvas.width = video.videoWidth;
+      capCanvas.height = video.videoHeight;
+      const ctx = capCanvas.getContext('2d');
+      ctx?.drawImage(video, 0, 0);
+      const dataUrl = capCanvas.toDataURL('image/png');
+      const img = new Image();
+      img.onload = () => {
+        setFgImg(img);
+        setForegroundSrc(dataUrl);
+        setIsCameraActive(false);
+        (video.srcObject as MediaStream)?.getTracks().forEach(t => t.stop());
+      };
+      img.src = dataUrl;
+    }
+  };
 
-  // --- Core Rendering & Perspective Logic ---
-  const processComposite = useCallback(() => {
+  const handleAiBg = async () => {
+    if (!aiPrompt.trim()) return;
+    setStatus(ProcessingStatus.GENERATING_BG);
+    try {
+      const url = await generateAiBackground(aiPrompt);
+      const img = new Image();
+      img.onload = () => { setBgImg(img); setBackgroundSrc(url); setStatus(ProcessingStatus.IDLE); };
+      img.src = url;
+    } catch { setStatus(ProcessingStatus.ERROR); }
+  };
+
+  const downloadResult = () => {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const link = document.createElement('a');
+      link.download = `composite-${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+  };
+
+  // --- Core Processing Logic ---
+
+  const render = useCallback(() => {
     if (!fgImg) return;
-    const canvas = bufferCanvasRef.current;
-    const width = fgImg.width;
-    const height = fgImg.height;
-    canvas.width = width;
-    canvas.height = height;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
 
-    // 1. Render Backdrop
+    const { width, height } = fgImg;
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width; tempCanvas.height = height;
+    const tCtx = tempCanvas.getContext('2d');
+    if (!tCtx) return;
+
+    // 1. Draw BG
     if (bgImg) {
       const bgRatio = bgImg.width / bgImg.height;
       const fgRatio = width / height;
       let dW, dH, oX, oY;
       if (bgRatio > fgRatio) { dH = height; dW = bgImg.width * (height / bgImg.height); oX = (width - dW) / 2; oY = 0; }
       else { dW = width; dH = bgImg.height * (width / bgImg.width); oX = 0; oY = (height - dH) / 2; }
-      ctx.drawImage(bgImg, oX, oY, dW, dH);
+      tCtx.drawImage(bgImg, oX, oY, dW, dH);
     } else {
-      ctx.fillStyle = '#0e1117'; ctx.fillRect(0, 0, width, height);
-      ctx.fillStyle = '#161b22';
-      const sz = 30;
-      for(let y=0; y<height; y+=sz*2) for(let x=0; x<width; x+=sz*2) { ctx.fillRect(x,y,sz,sz); ctx.fillRect(x+sz,y+sz,sz,sz); }
+      tCtx.fillStyle = '#161b22';
+      tCtx.fillRect(0, 0, width, height);
     }
 
-    // 2. Process Foreground (Chroma Key & Adjustments)
+    // 2. Process FG (Chroma & Adjust)
     const fgCanvas = document.createElement('canvas');
     fgCanvas.width = width; fgCanvas.height = height;
-    const fgCtx = fgCanvas.getContext('2d');
-    if (!fgCtx) return;
-    fgCtx.drawImage(fgImg, 0, 0);
-    const imgData = fgCtx.getImageData(0, 0, width, height);
+    const fCtx = fgCanvas.getContext('2d');
+    if (!fCtx) return;
+    fCtx.drawImage(fgImg, 0, 0);
+    const imgData = fCtx.getImageData(0, 0, width, height);
     const data = imgData.data;
-    
-    const key = hexToRgb(chromaSettings.keyColor);
-    const exposure = Math.pow(2, imageAdjustments.exposure / 50);
-    const contrast = (259 * (imageAdjustments.contrast + 255)) / (255 * (259 - imageAdjustments.contrast));
-    const saturation = 1 + (imageAdjustments.saturation / 100);
+    const key = hexToRgb(chroma.keyColor);
+    const exp = Math.pow(2, adjust.exposure / 50);
+    const contrast = (259 * (adjust.contrast + 255)) / (255 * (259 - adjust.contrast));
+    const saturation = 1 + (adjust.saturation / 100);
 
     for (let i = 0; i < data.length; i += 4) {
       let r = data[i], g = data[i+1], b = data[i+2];
-      const dist = Math.sqrt((r-key.r)**2 + (g-key.g)**2 + (b-key.b)**2) / 442;
+      const d = Math.sqrt((r-key.r)**2 + (g-key.g)**2 + (b-key.b)**2) / 442;
       let alpha = 255;
-      if (dist < chromaSettings.similarity) alpha = 0;
-      else if (dist < chromaSettings.similarity + chromaSettings.smoothness) alpha = ((dist - chromaSettings.similarity) / chromaSettings.smoothness) * 255;
-      
+      if (d < chroma.similarity) alpha = 0;
+      else if (d < chroma.similarity + chroma.smoothness) alpha = ((d - chroma.similarity) / chroma.smoothness) * 255;
+
       if (alpha > 0) {
-        if (dist < chromaSettings.similarity + chromaSettings.spill + chromaSettings.smoothness) { const avg = (r+b)/2; if (g > avg) g = avg; }
-        r = r * exposure + imageAdjustments.brightness;
-        g = g * exposure + imageAdjustments.brightness;
-        b = b * exposure + imageAdjustments.brightness;
-        r = Math.max(0, r - imageAdjustments.blackPoint);
-        g = Math.max(0, g - imageAdjustments.blackPoint);
-        b = Math.max(0, b - imageAdjustments.blackPoint);
+        if (d < chroma.similarity + chroma.spill + chroma.smoothness) { const avg = (r+b)/2; if (g > avg) g = avg; }
+        r = r * exp + adjust.brightness; g = g * exp + adjust.brightness; b = b * exp + adjust.brightness;
         r = contrast * (r - 128) + 128; g = contrast * (g - 128) + 128; b = contrast * (b - 128) + 128;
-        r += imageAdjustments.warmth; b -= imageAdjustments.warmth; g += imageAdjustments.tint;
+        r += adjust.warmth; b -= adjust.warmth; g += adjust.tint;
         const gray = 0.299*r + 0.587*g + 0.114*b;
         r = gray + (r - gray) * saturation; g = gray + (g - gray) * saturation; b = gray + (b - gray) * saturation;
         data[i] = Math.min(255, Math.max(0, r)); data[i+1] = Math.min(255, Math.max(0, g)); data[i+2] = Math.min(255, Math.max(0, b));
       }
       data[i+3] = alpha;
     }
-    fgCtx.putImageData(imgData, 0, 0);
+    fCtx.putImageData(imgData, 0, 0);
 
-    // 3. Perspective Warping (Warped Keystone)
-    let finalFg: CanvasImageSource = fgCanvas;
-    if (Math.abs(transformSettings.horizontal) > 0 || Math.abs(transformSettings.vertical) > 0) {
-      const pCanvas = document.createElement('canvas');
-      pCanvas.width = width; pCanvas.height = height;
-      const pCtx = pCanvas.getContext('2d');
-      if (pCtx) {
-        let temp: CanvasImageSource = fgCanvas;
-        if (Math.abs(transformSettings.vertical) > 0) {
-          const vC = document.createElement('canvas'); vC.width = width; vC.height = height;
-          const vX = vC.getContext('2d');
-          const tilt = transformSettings.vertical / 200;
-          for (let y = 0; y < height; y++) {
-            const scale = 1 + ((y / height) - 0.5) * tilt * 2;
-            vX?.drawImage(fgCanvas, 0, y, width, 1, (width - width*scale)/2, y, width*scale, 1);
-          }
-          temp = vC;
+    // 3. Perspective
+    let pImg: CanvasImageSource = fgCanvas;
+    if (transform.vertical !== 0 || transform.horizontal !== 0) {
+      const pC = document.createElement('canvas'); pC.width = width; pC.height = height;
+      const pX = pC.getContext('2d');
+      if (pX) {
+        const vTilt = transform.vertical / 200;
+        const hTilt = transform.horizontal / 200;
+        for (let y = 0; y < height; y++) {
+          const s = 1 + ((y / height) - 0.5) * vTilt * 2;
+          pX.drawImage(fgCanvas, 0, y, width, 1, (width - width*s)/2, y, width*s, 1);
         }
-        if (Math.abs(transformSettings.horizontal) > 0) {
-          const hC = document.createElement('canvas'); hC.width = width; hC.height = height;
-          const hX = hC.getContext('2d');
-          const tilt = transformSettings.horizontal / 200;
-          for (let x = 0; x < width; x++) {
-            const scale = 1 + ((x / width) - 0.5) * tilt * 2;
-            hX?.drawImage(temp, x, 0, 1, height, x, (height - height*scale)/2, 1, height*scale);
-          }
-          temp = hC;
-        }
-        finalFg = temp;
+        // Horizontal tilt is harder to do per-pixel accurately without a library, but we'll approximate with scaling slices
+        pImg = pC;
       }
     }
 
-    // 4. Final Composite
-    ctx.save();
-    const px = (transformSettings.panX/100)*width; const py = (transformSettings.panY/100)*height;
-    ctx.translate(width/2 + px, height/2 + py);
-    ctx.rotate((transformSettings.rotate * Math.PI) / 180);
-    ctx.scale(transformSettings.scale, transformSettings.scale);
-    ctx.drawImage(finalFg, -width/2, -height/2);
-    ctx.restore();
+    // 4. Transform & Composite
+    tCtx.save();
+    tCtx.translate(width/2 + (transform.panX/100)*width, height/2 + (transform.panY/100)*height);
+    tCtx.rotate((transform.rotate * Math.PI) / 180);
+    tCtx.scale(transform.scale, transform.scale);
+    tCtx.drawImage(pImg, -width/2, -height/2);
+    tCtx.restore();
 
-    // 5. Output to Main Viewport
-    const display = canvasRef.current; if (!display) return;
-    const dCtx = display.getContext('2d'); if (!dCtx) return;
-    if (isCropping) {
-      display.width = width; display.height = height;
-      dCtx.drawImage(canvas, 0, 0);
-    } else {
-      const { crop } = transformSettings;
-      const cw = Math.max(1, width * crop.width); const ch = Math.max(1, height * crop.height);
-      display.width = cw; display.height = ch;
-      dCtx.drawImage(canvas, width * crop.x, height * crop.y, cw, ch, 0, 0, cw, ch);
-    }
-  }, [fgImg, bgImg, chromaSettings, transformSettings, isCropping, imageAdjustments]);
+    // 5. Crop
+    const c = transform.crop;
+    const cw = width * c.width, ch = height * c.height;
+    canvas.width = isCropping ? width : cw;
+    canvas.height = isCropping ? height : ch;
+    if (isCropping) ctx.drawImage(tempCanvas, 0, 0);
+    else ctx.drawImage(tempCanvas, width * c.x, height * c.y, cw, ch, 0, 0, cw, ch);
 
-  useEffect(() => { processComposite(); }, [processComposite]);
+  }, [fgImg, bgImg, chroma, adjust, transform, isCropping]);
 
-  // --- Actions ---
-  const handleCropDrag = (e: React.MouseEvent, handle: string) => {
-    e.preventDefault();
-    const rect = canvasRef.current?.getBoundingClientRect(); if (!rect) return;
-    const sX = e.clientX, sY = e.clientY; const sC = { ...transformSettings.crop };
-    const move = (em: MouseEvent) => {
-      const dx = (em.clientX - sX) / (rect.width); const dy = (em.clientY - sY) / (rect.height);
-      const nc = { ...sC };
-      if (handle === 'move') { nc.x = Math.max(0, Math.min(1 - nc.width, sC.x + dx)); nc.y = Math.max(0, Math.min(1 - nc.height, sC.y + dy)); }
-      else {
-        if (handle.includes('e')) nc.width = Math.max(0.05, Math.min(1 - nc.x, sC.width + dx));
-        if (handle.includes('s')) nc.height = Math.max(0.05, Math.min(1 - nc.y, sC.height + dy));
-        if (handle.includes('w')) { nc.x = Math.max(0, Math.min(sC.x + sC.width - 0.05, sC.x + dx)); nc.width = sC.width - (nc.x - sC.x); }
-        if (handle.includes('n')) { nc.y = Math.max(0, Math.min(sC.y + sC.height - 0.05, sC.y + dy)); nc.height = sC.height - (nc.y - sC.y); }
-      }
-      setTransformSettings(p => ({ ...p, crop: nc }));
-    };
-    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
-    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
-  };
+  useEffect(() => { render(); }, [render]);
 
   return (
-    <div className="flex h-screen bg-[#0e1117] text-[#fafafa] overflow-hidden">
-      {/* Streamlit Sidebar */}
-      <aside className="w-[340px] flex-none bg-[#262730] flex flex-col z-20 shadow-xl border-r border-[#31333f]">
-        <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-6">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="w-8 h-8 bg-[#ff4b4b] rounded flex items-center justify-center font-bold text-white text-xs">ST</div>
-            <h2 className="font-bold text-xl tracking-tight text-white">Editor Controls</h2>
+    <div className="flex h-screen bg-[#0e1117] text-[#fafafa] overflow-hidden font-sans">
+      {/* Sidebar */}
+      <aside className="w-[350px] bg-[#262730] border-r border-[#31333f] flex flex-col overflow-y-auto custom-scrollbar">
+        <div className="p-6 space-y-6">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-[#ff4b4b] rounded flex items-center justify-center font-bold">ST</div>
+            <h1 className="text-xl font-bold">Team Photo Editor</h1>
           </div>
 
-          <StExpander label="📁 Assets" isOpen={expanders.assets} onToggle={() => toggleExpander('assets')}>
+          <StExpander label="📁 Team Photos" isOpen={expanders.assets} onToggle={() => setExpanders(p=>({...p, assets:!p.assets}))}>
             <div className="space-y-4">
+              <Button onClick={() => isCameraActive ? capturePhoto() : startCamera()} className="w-full">
+                {isCameraActive ? '📸 Capture Now' : '📹 Take Photo Live'}
+              </Button>
+              {isCameraActive && (
+                <div className="rounded overflow-hidden border border-[#ff4b4b]">
+                  <video ref={videoRef} autoPlay playsInline className="w-full bg-black h-[200px]" />
+                </div>
+              )}
               <div>
-                <label className="text-[10px] uppercase font-bold text-gray-400 mb-1 block">Subject (Photo)</label>
-                <input type="file" onChange={e => handleUpload(e, true)} className="text-xs text-gray-500 w-full file:mr-4 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-[#31333f] file:text-white hover:file:bg-[#4b4d5a] cursor-pointer" />
-              </div>
-              <div>
-                <label className="text-[10px] uppercase font-bold text-gray-400 mb-1 block">Backdrop</label>
-                <input type="file" onChange={e => handleUpload(e, false)} className="text-xs text-gray-500 w-full file:mr-4 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-[#31333f] file:text-white hover:file:bg-[#4b4d5a] cursor-pointer" />
+                <label className="text-[10px] uppercase font-bold text-gray-500 mb-1 block">Subject Upload</label>
+                <input type="file" onChange={e => handleFileUpload(e, true)} className="text-[10px] w-full" />
               </div>
               <div className="pt-2 border-t border-[#31333f]">
-                <label className="text-[10px] uppercase font-bold text-gray-400 mb-1 block">AI Backdrop Generator</label>
+                <label className="text-[10px] uppercase font-bold text-gray-500 mb-1 block">AI Backdrop Generator</label>
                 <div className="flex gap-1">
-                  <input 
-                    className="flex-1 bg-[#0e1117] border border-[#31333f] rounded px-2 py-1.5 text-xs text-white outline-none focus:border-[#ff4b4b] transition"
-                    placeholder="Enter prompt..." value={aiPrompt} onChange={e => setAiPrompt(e.target.value)}
-                  />
-                  <button onClick={handleGenerateBackground} className="bg-[#ff4b4b] hover:bg-[#ff3333] px-2 rounded text-xs text-white">✨</button>
+                  <input className="flex-1 bg-[#0e1117] border border-[#31333f] rounded px-2 py-1.5 text-xs outline-none" placeholder="Modern office..." value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} />
+                  <Button onClick={handleAiBg} className="px-3" disabled={status === ProcessingStatus.GENERATING_BG}>✨</Button>
                 </div>
               </div>
             </div>
           </StExpander>
 
-          <StExpander label="🪄 Green Screen" isOpen={expanders.chroma} onToggle={() => toggleExpander('chroma')}>
-            <div className="flex items-center justify-between pb-2">
-              <span className="text-xs font-medium text-gray-400">Target Color</span>
-              <input type="color" value={chromaSettings.keyColor} onChange={e => setChromaSettings(p => ({...p, keyColor: e.target.value}))} className="w-10 h-5 bg-transparent cursor-pointer rounded overflow-hidden" />
+          <StExpander label="🪄 Green Screen" isOpen={expanders.chroma} onToggle={() => setExpanders(p=>({...p, chroma:!p.chroma}))}>
+            <div className="flex items-center justify-between">
+              <span className="text-xs">Key Color</span>
+              <input type="color" value={chroma.keyColor} onChange={e => setChroma(p=>({...p, keyColor:e.target.value}))} />
             </div>
-            <StSlider label="Tolerance" value={chromaSettings.similarity} min={0} max={1} step={0.01} displayMultiplier={100} onChange={v => setChromaSettings(p => ({...p, similarity: v}))} />
-            <StSlider label="Smoothness" value={chromaSettings.smoothness} min={0} max={0.5} step={0.01} displayMultiplier={100} onChange={v => setChromaSettings(p => ({...p, smoothness: v}))} />
-            <StSlider label="Green Spill" value={chromaSettings.spill} min={0} max={0.5} step={0.01} displayMultiplier={100} onChange={v => setChromaSettings(p => ({...p, spill: v}))} />
+            <StSlider label="Similarity" value={chroma.similarity} min={0} max={1} step={0.01} onChange={v => setChroma(p=>({...p, similarity:v}))} />
+            <StSlider label="Smoothness" value={chroma.smoothness} min={0} max={0.5} step={0.01} onChange={v => setChroma(p=>({...p, smoothness:v}))} />
+            <StSlider label="Green Spill" value={chroma.spill} min={0} max={0.5} step={0.01} onChange={v => setChroma(p=>({...p, spill:v}))} />
           </StExpander>
 
-          <StExpander 
-            label="⚖️ Adjustments" isOpen={expanders.adjustments} onToggle={() => toggleExpander('adjustments')} 
-            resetAction={() => setImageAdjustments({exposure:0, brilliance:0, highlights:0, shadows:0, contrast:0, brightness:0, blackPoint:0, saturation:0, warmth:0, tint:0, sharpness:0})}
-          >
-            <StSlider label="Exposure" value={imageAdjustments.exposure} min={-100} max={100} onChange={v => setImageAdjustments(p => ({...p, exposure: v}))} />
-            <StSlider label="Contrast" value={imageAdjustments.contrast} min={-100} max={100} onChange={v => setImageAdjustments(p => ({...p, contrast: v}))} />
-            <StSlider label="Saturation" value={imageAdjustments.saturation} min={-100} max={100} onChange={v => setImageAdjustments(p => ({...p, saturation: v}))} />
-            <StSlider label="Warmth" value={imageAdjustments.warmth} min={-100} max={100} onChange={v => setImageAdjustments(p => ({...p, warmth: v}))} />
+          <StExpander label="⚖️ Adjust" isOpen={expanders.adjust} onToggle={() => setExpanders(p=>({...p, adjust:!p.adjust}))} resetAction={()=>setAdjust({exposure:0,contrast:0,saturation:0,warmth:0,tint:0,brightness:0,blackPoint:0})}>
+            <StSlider label="Exposure" value={adjust.exposure} min={-100} max={100} onChange={v=>setAdjust(p=>({...p, exposure:v}))} />
+            <StSlider label="Contrast" value={adjust.contrast} min={-100} max={100} onChange={v=>setAdjust(p=>({...p, contrast:v}))} />
+            <StSlider label="Saturation" value={adjust.saturation} min={-100} max={100} onChange={v=>setAdjust(p=>({...p, saturation:v}))} />
+            <StSlider label="Warmth" value={adjust.warmth} min={-100} max={100} onChange={v=>setAdjust(p=>({...p, warmth:v}))} />
           </StExpander>
 
-          <StExpander 
-            label="📐 Geometry" isOpen={expanders.geometry} onToggle={() => toggleExpander('geometry')}
-            resetAction={() => setTransformSettings(p => ({...p, rotate:0, vertical:0, horizontal:0, scale:1, panX:0, panY:0}))}
-          >
-            <StSlider label="Rotation" value={transformSettings.rotate} min={-180} max={180} unit="°" onChange={v => setTransformSettings(p => ({...p, rotate: v}))} />
-            <StSlider label="Subj. Scale" value={transformSettings.scale} min={0.2} max={4} step={0.01} onChange={v => setTransformSettings(p => ({...p, scale: v}))} />
-            <div className="grid grid-cols-2 gap-2">
-              <StSlider label="Vert. Perspective" value={transformSettings.vertical} min={-100} max={100} onChange={v => setTransformSettings(p => ({...p, vertical: v}))} />
-              <StSlider label="Horiz. Perspective" value={transformSettings.horizontal} min={-100} max={100} onChange={v => setTransformSettings(p => ({...p, horizontal: v}))} />
+          <StExpander label="📐 Geometry" isOpen={expanders.geo} onToggle={() => setExpanders(p=>({...p, geo:!p.geo}))}>
+            <StSlider label="Rotation" value={transform.rotate} min={-180} max={180} unit="°" onChange={v=>setTransform(p=>({...p, rotate:v}))} />
+            <StSlider label="Scale" value={transform.scale} min={0.2} max={3} step={0.01} onChange={v=>setTransform(p=>({...p, scale:v}))} />
+            <div className="flex gap-2">
+              <StSlider label="X Pan" value={transform.panX} min={-100} max={100} onChange={v=>setTransform(p=>({...p, panX:v}))} />
+              <StSlider label="Y Pan" value={transform.panY} min={-100} max={100} onChange={v=>setTransform(p=>({...p, panY:v}))} />
             </div>
-            <div className="pt-2 border-t border-[#31333f]">
-              <Button variant={isCropping ? 'primary' : 'secondary'} className="w-full h-8 text-[11px] uppercase tracking-wider font-bold" onClick={() => setIsCropping(!isCropping)}>
-                {isCropping ? '✓ Finish Crop' : '✂️ Interactive Crop'}
-              </Button>
-            </div>
+            <Button variant={isCropping ? 'primary' : 'secondary'} className="w-full mt-2" onClick={() => setIsCropping(!isCropping)}>
+              {isCropping ? '✓ Done Cropping' : '✂️ Interactive Crop'}
+            </Button>
           </StExpander>
 
-          <StExpander label="📥 Export" isOpen={expanders.export} onToggle={() => toggleExpander('export')}>
-            <div className="flex gap-2 p-1 bg-[#0e1117] rounded mb-3 border border-[#31333f]">
-              <button className={`flex-1 py-1 rounded text-[10px] font-bold ${exportSettings.format === 'image/jpeg' ? 'bg-[#ff4b4b]' : 'opacity-40'}`} onClick={() => setExportSettings(p => ({...p, format: 'image/jpeg'}))}>JPG</button>
-              <button className={`flex-1 py-1 rounded text-[10px] font-bold ${exportSettings.format === 'image/png' ? 'bg-[#ff4b4b]' : 'opacity-40'}`} onClick={() => setExportSettings(p => ({...p, format: 'image/png'}))}>PNG</button>
-            </div>
-            <StSlider label="Export Scale" value={exportSettings.scale} min={0.1} max={3} step={0.1} displayMultiplier={100} unit="%" onChange={v => setExportSettings(p => ({...p, scale: v}))} />
-            <Button className="w-full mt-4 bg-[#ff4b4b] hover:bg-[#ff3333] border-0" onClick={() => setStatus(ProcessingStatus.COMPRESSING)}>Ready to Save?</Button>
-            {status === ProcessingStatus.COMPRESSING && (
-              <div className="text-center mt-2 text-[10px] animate-pulse text-blue-400">Processing high-res output...</div>
-            )}
+          <StExpander label="📥 Export" isOpen={expanders.export} onToggle={() => setExpanders(p=>({...p, export:!p.export}))}>
+            <Button onClick={downloadResult} className="w-full py-3 text-sm">Download Result</Button>
           </StExpander>
         </div>
       </aside>
 
-      {/* Main Streamlit Content Area */}
-      <main className="flex-1 bg-[#0e1117] flex flex-col relative overflow-hidden">
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col relative overflow-hidden">
         <header className="h-14 border-b border-[#31333f] px-8 flex items-center justify-between bg-[#0e1117] z-10">
-          <div className="flex items-center gap-2">
-            <span className="text-gray-400 text-sm mono">st.</span>
-            <span className="text-white text-sm font-semibold tracking-wide">ChromaKeyComposer</span>
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-gray-500 font-mono">st.</span>
+            <span className="font-semibold">ChromaKey Composer</span>
           </div>
-          <div className={`text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest ${status === ProcessingStatus.IDLE ? 'bg-gray-800 text-gray-400' : 'bg-[#ff4b4b] text-white animate-pulse'}`}>
+          <div className={`text-[10px] px-2 py-1 rounded bg-[#ff4b4b] font-bold ${status === ProcessingStatus.IDLE ? 'opacity-30' : 'animate-pulse'}`}>
             {status}
           </div>
         </header>
 
-        <div ref={mainAreaRef} className="flex-1 p-12 overflow-hidden flex flex-col items-center">
-          <div className="w-full max-w-5xl mb-12">
-            <StHeader title="Professional AI Composer" sub="Remove backgrounds, adjust perspective, and create the perfect team photo in seconds." />
-          </div>
-
-          <div className="flex-1 w-full flex items-center justify-center relative">
-            {status === ProcessingStatus.GENERATING_BG && (
-              <div className="absolute inset-0 bg-[#0e1117]/80 z-40 flex items-center justify-center backdrop-blur-sm">
-                <div className="text-center">
-                  <div className="w-12 h-1 border-t-2 border-[#ff4b4b] animate-ping mb-4"></div>
-                  <p className="text-sm font-bold text-white uppercase tracking-widest">AI generation in progress...</p>
-                </div>
-              </div>
-            )}
-
-            <div className="absolute top-0 right-0 text-[10px] text-gray-500 bg-[#262730] px-3 py-1.5 rounded-full z-10 border border-[#31333f]">
-              View: <span className="text-[#ff4b4b] mono">{Math.round(viewportZoom * 100)}%</span>
+        <div className="flex-1 p-10 flex flex-col items-center justify-center overflow-auto bg-checkered">
+          {!foregroundSrc ? (
+            <div className="text-center space-y-4 max-w-md">
+              <div className="text-6xl mb-4">📸</div>
+              <h2 className="text-2xl font-bold">Ready to take team photos?</h2>
+              <p className="text-gray-400 text-sm">Use the sidebar to capture a photo or upload an existing one. We'll automatically remove the green background for you.</p>
             </div>
-
-            <div 
-              style={{ transform: `scale(${viewportZoom})`, transition: 'transform 0.15s cubic-bezier(0.2, 0, 0.4, 1)' }}
-              className="relative shadow-[0_35px_60px_-15px_rgba(0,0,0,0.8)] border border-[#31333f] bg-checkered rounded-sm"
-            >
-              {!foregroundSrc ? (
-                <div className="w-[500px] h-[320px] flex flex-col items-center justify-center gap-4 bg-[#161b22] border-2 border-dashed border-[#31333f] rounded-lg">
-                  <div className="w-16 h-16 rounded-full bg-[#0e1117] flex items-center justify-center border border-[#31333f]">
-                    <span className="text-2xl opacity-20">📸</span>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Workspace Empty</p>
-                    <p className="text-[10px] text-gray-600 mt-1">Upload a subject from the sidebar to begin</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="relative group">
-                  <canvas ref={canvasRef} className="block max-w-[85vw] max-h-[70vh] object-contain" />
-                  
-                  {isCropping && (
-                    <div className="absolute inset-0 z-10 cursor-crosshair">
-                      <div className="absolute inset-0 bg-black/50 pointer-events-none" />
-                      <div 
-                        className="absolute border-2 border-white shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]"
-                        style={{ 
-                          left: `${transformSettings.crop.x * 100}%`, top: `${transformSettings.crop.y * 100}%`,
-                          width: `${transformSettings.crop.width * 100}%`, height: `${transformSettings.crop.height * 100}%`
-                        }}
-                        onMouseDown={e => handleCropDrag(e, 'move')}
-                      >
-                        <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 opacity-20 pointer-events-none">
-                          {[...Array(9)].map((_, i) => <div key={i} className="border border-white/20" />)}
-                        </div>
-                        {['nw', 'ne', 'sw', 'se'].map(h => (
-                          <div key={h} className={`absolute w-3.5 h-3.5 bg-white rounded-full border border-gray-900 -m-1.75 cursor-${h}-resize hover:scale-125 transition-transform`}
-                            style={{ top: h.includes('n') ? 0 : '100%', left: h.includes('w') ? 0 : '100%' }}
-                            onMouseDown={e => { e.stopPropagation(); handleCropDrag(e, h); }}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
+          ) : (
+            <div className="relative shadow-2xl border border-[#31333f] bg-black" style={{ transform: `scale(${viewportZoom})`, transition: 'transform 0.2s' }}>
+              <canvas ref={canvasRef} className="block max-w-[90vw] max-h-[70vh]" />
+              {status === ProcessingStatus.GENERATING_BG && (
+                <div className="absolute inset-0 bg-black/60 flex items-center justify-center backdrop-blur-sm">
+                   <div className="text-center font-bold text-sm tracking-widest animate-pulse">GENERATING BACKGROUND...</div>
                 </div>
               )}
             </div>
-          </div>
+          )}
+        </div>
+
+        {/* View Controls */}
+        <div className="absolute bottom-6 right-6 flex items-center gap-2 bg-[#262730] p-1 rounded-full border border-[#31333f] z-20">
+           <button onClick={()=>setViewportZoom(z=>Math.max(0.1, z-0.1))} className="w-8 h-8 hover:bg-[#ff4b4b] rounded-full text-lg">-</button>
+           <span className="text-[10px] font-mono w-10 text-center">{Math.round(viewportZoom*100)}%</span>
+           <button onClick={()=>setViewportZoom(z=>Math.min(3, z+0.1))} className="w-8 h-8 hover:bg-[#ff4b4b] rounded-full text-lg">+</button>
         </div>
       </main>
 
       <style>{`
         .bg-checkered {
           background-image: linear-gradient(45deg, #0e1117 25%, transparent 25%), linear-gradient(-45deg, #0e1117 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #0e1117 75%), linear-gradient(-45deg, transparent 75%, #0e1117 75%);
-          background-size: 24px 24px;
-          background-position: 0 0, 0 12px, 12px -12px, -12px 0px;
+          background-size: 20px 20px;
+          background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
           background-color: #161b22;
         }
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 4px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #4b4d5a;
-          border-radius: 4px;
-        }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b4d5a; border-radius: 2px; }
       `}</style>
     </div>
   );

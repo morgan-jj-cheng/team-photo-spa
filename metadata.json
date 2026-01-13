@@ -1,5 +1,7 @@
 {
   "name": "ChromaKey AI Composer",
   "description": "Professional Green Screen removal tool with AI-powered background generation and smart file compression.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "camera"
+  ]
 }
