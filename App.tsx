@@ -86,70 +86,45 @@ const hexToRgb = (hex: string) => {
   } : { r: 0, g: 255, b: 0 };
 };
 
-// --- Streamlit UI Components ---
+// --- Modern UI Components ---
 
-const Button: React.FC<{
-  children: React.ReactNode;
+const IconButton: React.FC<{
+  icon: string;
+  label?: string;
   onClick?: () => void;
-  variant?: 'primary' | 'secondary' | 'danger';
-  className?: string;
-  disabled?: boolean;
-}> = ({ children, onClick, variant = 'primary', className = '', disabled }) => {
-  const variants = {
-    primary: "bg-[#ff4b4b] text-white hover:bg-[#ff3333]",
-    secondary: "bg-[#31333f] text-[#fafafa] hover:bg-[#4b4d5a]",
-    danger: "bg-transparent border border-red-500 text-red-500 hover:bg-red-500 hover:text-white"
-  };
-  return (
-    <button
-      disabled={disabled}
-      onClick={onClick}
-      className={`px-4 py-2 rounded text-xs font-semibold transition-all disabled:opacity-50 ${variants[variant]} ${className}`}
-    >
-      {children}
-    </button>
-  );
-};
-
-const StExpander: React.FC<{
-  label: string;
-  isOpen: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-  resetAction?: () => void;
-}> = ({ label, isOpen, onToggle, children, resetAction }) => (
-  <div className="border border-[#31333f] rounded mb-4 bg-[#262730]">
-    <div className="flex items-center justify-between p-3 cursor-pointer select-none" onClick={onToggle}>
-      <div className="flex items-center gap-3">
-        <span className={`text-[10px] transition-transform ${isOpen ? 'rotate-180' : ''}`}>▼</span>
-        <span className="text-sm font-semibold">{label}</span>
-      </div>
-      {resetAction && (
-        <button onClick={(e) => { e.stopPropagation(); resetAction(); }} className="text-[10px] text-[#ff4b4b] hover:underline uppercase">Reset</button>
-      )}
-    </div>
-    {isOpen && <div className="p-4 border-t border-[#31333f] space-y-4">{children}</div>}
-  </div>
+  active?: boolean;
+  variant?: 'primary' | 'secondary';
+}> = ({ icon, label, onClick, active, variant = 'secondary' }) => (
+  <button
+    onClick={onClick}
+    className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-all text-sm font-medium
+      ${active 
+        ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' 
+        : 'bg-white/5 hover:bg-white/10 text-zinc-300'
+      }`}
+  >
+    <span>{icon}</span>
+    {label && <span>{label}</span>}
+  </button>
 );
 
-const StSlider: React.FC<{
+const ControlSlider: React.FC<{
   label: string;
   value: number;
   min: number;
   max: number;
   step?: number;
-  unit?: string;
   onChange: (val: number) => void;
-}> = ({ label, value, min, max, step = 1, unit = "", onChange }) => (
-  <div className="space-y-1">
-    <div className="flex justify-between">
-      <label className="text-xs font-medium text-gray-300">{label}</label>
-      <span className="text-xs text-[#ff4b4b] font-mono">{value}{unit}</span>
+}> = ({ label, value, min, max, step = 1, onChange }) => (
+  <div className="space-y-2 mb-4">
+    <div className="flex justify-between text-[11px] font-medium text-zinc-400 uppercase tracking-wider">
+      <span>{label}</span>
+      <span className="text-indigo-400">{value}</span>
     </div>
     <input
       type="range" min={min} max={max} step={step} value={value}
       onChange={(e) => onChange(parseFloat(e.target.value))}
-      className="w-full h-1 bg-[#31333f] rounded appearance-none cursor-pointer accent-[#ff4b4b]"
+      className="w-full h-1.5 bg-white/5 rounded-full appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition-all"
     />
   </div>
 );
@@ -160,11 +135,11 @@ const App: React.FC = () => {
   const [foregroundSrc, setForegroundSrc] = useState<string | null>(null);
   const [backgroundSrc, setBackgroundSrc] = useState<string | null>(null);
   const [status, setStatus] = useState<ProcessingStatus>(ProcessingStatus.IDLE);
-  const [viewportZoom, setViewportZoom] = useState(0.85);
+  const [activeTab, setActiveTab] = useState<'chroma' | 'adjust' | 'geo' | 'bg'>('chroma');
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
+  const [viewportZoom, setViewportZoom] = useState(1);
 
-  const [expanders, setExpanders] = useState({ assets: true, chroma: true, adjust: true, geo: true, export: false });
   const [chroma, setChroma] = useState<ChromaSettings>({ similarity: 0.35, smoothness: 0.1, spill: 0.1, keyColor: '#00b140' });
   const [adjust, setAdjust] = useState<ImageAdjustments>({ exposure: 0, contrast: 0, saturation: 0, warmth: 0, tint: 0, brightness: 0, blackPoint: 0 });
   const [transform, setTransform] = useState<TransformSettings>({ rotate: 0, vertical: 0, horizontal: 0, scale: 1.0, panX: 0, panY: 0, crop: { x: 0, y: 0, width: 1, height: 1 } });
@@ -190,27 +165,13 @@ const App: React.FC = () => {
     }
   };
 
-  const startCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        setIsCameraActive(true);
-      }
-    } catch (err) {
-      console.error("Camera error:", err);
-      alert("Could not access camera.");
-    }
-  };
-
   const capturePhoto = () => {
     if (videoRef.current) {
       const video = videoRef.current;
       const capCanvas = document.createElement('canvas');
       capCanvas.width = video.videoWidth;
       capCanvas.height = video.videoHeight;
-      const ctx = capCanvas.getContext('2d');
-      ctx?.drawImage(video, 0, 0);
+      capCanvas.getContext('2d')?.drawImage(video, 0, 0);
       const dataUrl = capCanvas.toDataURL('image/png');
       const img = new Image();
       img.onload = () => {
@@ -244,7 +205,7 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Core Processing Logic ---
+  // --- Rendering ---
 
   const render = useCallback(() => {
     if (!fgImg) return;
@@ -259,7 +220,7 @@ const App: React.FC = () => {
     const tCtx = tempCanvas.getContext('2d');
     if (!tCtx) return;
 
-    // 1. Draw BG
+    // 1. BG
     if (bgImg) {
       const bgRatio = bgImg.width / bgImg.height;
       const fgRatio = width / height;
@@ -268,11 +229,11 @@ const App: React.FC = () => {
       else { dW = width; dH = bgImg.height * (width / bgImg.width); oX = 0; oY = (height - dH) / 2; }
       tCtx.drawImage(bgImg, oX, oY, dW, dH);
     } else {
-      tCtx.fillStyle = '#161b22';
+      tCtx.fillStyle = '#09090b';
       tCtx.fillRect(0, 0, width, height);
     }
 
-    // 2. Process FG (Chroma & Adjust)
+    // 2. Chroma & Adjust
     const fgCanvas = document.createElement('canvas');
     fgCanvas.width = width; fgCanvas.height = height;
     const fCtx = fgCanvas.getContext('2d');
@@ -305,160 +266,216 @@ const App: React.FC = () => {
     }
     fCtx.putImageData(imgData, 0, 0);
 
-    // 3. Perspective
-    let pImg: CanvasImageSource = fgCanvas;
-    if (transform.vertical !== 0 || transform.horizontal !== 0) {
-      const pC = document.createElement('canvas'); pC.width = width; pC.height = height;
-      const pX = pC.getContext('2d');
-      if (pX) {
-        const vTilt = transform.vertical / 200;
-        const hTilt = transform.horizontal / 200;
-        for (let y = 0; y < height; y++) {
-          const s = 1 + ((y / height) - 0.5) * vTilt * 2;
-          pX.drawImage(fgCanvas, 0, y, width, 1, (width - width*s)/2, y, width*s, 1);
-        }
-        // Horizontal tilt is harder to do per-pixel accurately without a library, but we'll approximate with scaling slices
-        pImg = pC;
-      }
-    }
-
-    // 4. Transform & Composite
+    // 3. Composite
     tCtx.save();
     tCtx.translate(width/2 + (transform.panX/100)*width, height/2 + (transform.panY/100)*height);
     tCtx.rotate((transform.rotate * Math.PI) / 180);
     tCtx.scale(transform.scale, transform.scale);
-    tCtx.drawImage(pImg, -width/2, -height/2);
+    tCtx.drawImage(fgCanvas, -width/2, -height/2);
     tCtx.restore();
 
-    // 5. Crop
-    const c = transform.crop;
-    const cw = width * c.width, ch = height * c.height;
+    // 4. Final
+    const cw = width * transform.crop.width, ch = height * transform.crop.height;
     canvas.width = isCropping ? width : cw;
     canvas.height = isCropping ? height : ch;
     if (isCropping) ctx.drawImage(tempCanvas, 0, 0);
-    else ctx.drawImage(tempCanvas, width * c.x, height * c.y, cw, ch, 0, 0, cw, ch);
-
+    else ctx.drawImage(tempCanvas, width * transform.crop.x, height * transform.crop.y, cw, ch, 0, 0, cw, ch);
   }, [fgImg, bgImg, chroma, adjust, transform, isCropping]);
 
   useEffect(() => { render(); }, [render]);
 
   return (
-    <div className="flex h-screen bg-[#0e1117] text-[#fafafa] overflow-hidden font-sans">
-      {/* Sidebar */}
-      <aside className="w-[350px] bg-[#262730] border-r border-[#31333f] flex flex-col overflow-y-auto custom-scrollbar">
-        <div className="p-6 space-y-6">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-[#ff4b4b] rounded flex items-center justify-center font-bold">ST</div>
-            <h1 className="text-xl font-bold">Team Photo Editor</h1>
+    <div className="flex h-screen bg-[#09090b] text-zinc-100 overflow-hidden font-sans selection:bg-indigo-500/30">
+      
+      {/* Top Navigation */}
+      <nav className="fixed top-0 left-0 right-0 h-16 border-b border-white/5 bg-zinc-950/50 backdrop-blur-xl flex items-center justify-between px-6 z-40">
+        <div className="flex items-center gap-4">
+          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-600/20">
+            <span className="text-xl">📸</span>
           </div>
-
-          <StExpander label="📁 Team Photos" isOpen={expanders.assets} onToggle={() => setExpanders(p=>({...p, assets:!p.assets}))}>
-            <div className="space-y-4">
-              <Button onClick={() => isCameraActive ? capturePhoto() : startCamera()} className="w-full">
-                {isCameraActive ? '📸 Capture Now' : '📹 Take Photo Live'}
-              </Button>
-              {isCameraActive && (
-                <div className="rounded overflow-hidden border border-[#ff4b4b]">
-                  <video ref={videoRef} autoPlay playsInline className="w-full bg-black h-[200px]" />
-                </div>
-              )}
-              <div>
-                <label className="text-[10px] uppercase font-bold text-gray-500 mb-1 block">Subject Upload</label>
-                <input type="file" onChange={e => handleFileUpload(e, true)} className="text-[10px] w-full" />
-              </div>
-              <div className="pt-2 border-t border-[#31333f]">
-                <label className="text-[10px] uppercase font-bold text-gray-500 mb-1 block">AI Backdrop Generator</label>
-                <div className="flex gap-1">
-                  <input className="flex-1 bg-[#0e1117] border border-[#31333f] rounded px-2 py-1.5 text-xs outline-none" placeholder="Modern office..." value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} />
-                  <Button onClick={handleAiBg} className="px-3" disabled={status === ProcessingStatus.GENERATING_BG}>✨</Button>
-                </div>
-              </div>
-            </div>
-          </StExpander>
-
-          <StExpander label="🪄 Green Screen" isOpen={expanders.chroma} onToggle={() => setExpanders(p=>({...p, chroma:!p.chroma}))}>
-            <div className="flex items-center justify-between">
-              <span className="text-xs">Key Color</span>
-              <input type="color" value={chroma.keyColor} onChange={e => setChroma(p=>({...p, keyColor:e.target.value}))} />
-            </div>
-            <StSlider label="Similarity" value={chroma.similarity} min={0} max={1} step={0.01} onChange={v => setChroma(p=>({...p, similarity:v}))} />
-            <StSlider label="Smoothness" value={chroma.smoothness} min={0} max={0.5} step={0.01} onChange={v => setChroma(p=>({...p, smoothness:v}))} />
-            <StSlider label="Green Spill" value={chroma.spill} min={0} max={0.5} step={0.01} onChange={v => setChroma(p=>({...p, spill:v}))} />
-          </StExpander>
-
-          <StExpander label="⚖️ Adjust" isOpen={expanders.adjust} onToggle={() => setExpanders(p=>({...p, adjust:!p.adjust}))} resetAction={()=>setAdjust({exposure:0,contrast:0,saturation:0,warmth:0,tint:0,brightness:0,blackPoint:0})}>
-            <StSlider label="Exposure" value={adjust.exposure} min={-100} max={100} onChange={v=>setAdjust(p=>({...p, exposure:v}))} />
-            <StSlider label="Contrast" value={adjust.contrast} min={-100} max={100} onChange={v=>setAdjust(p=>({...p, contrast:v}))} />
-            <StSlider label="Saturation" value={adjust.saturation} min={-100} max={100} onChange={v=>setAdjust(p=>({...p, saturation:v}))} />
-            <StSlider label="Warmth" value={adjust.warmth} min={-100} max={100} onChange={v=>setAdjust(p=>({...p, warmth:v}))} />
-          </StExpander>
-
-          <StExpander label="📐 Geometry" isOpen={expanders.geo} onToggle={() => setExpanders(p=>({...p, geo:!p.geo}))}>
-            <StSlider label="Rotation" value={transform.rotate} min={-180} max={180} unit="°" onChange={v=>setTransform(p=>({...p, rotate:v}))} />
-            <StSlider label="Scale" value={transform.scale} min={0.2} max={3} step={0.01} onChange={v=>setTransform(p=>({...p, scale:v}))} />
-            <div className="flex gap-2">
-              <StSlider label="X Pan" value={transform.panX} min={-100} max={100} onChange={v=>setTransform(p=>({...p, panX:v}))} />
-              <StSlider label="Y Pan" value={transform.panY} min={-100} max={100} onChange={v=>setTransform(p=>({...p, panY:v}))} />
-            </div>
-            <Button variant={isCropping ? 'primary' : 'secondary'} className="w-full mt-2" onClick={() => setIsCropping(!isCropping)}>
-              {isCropping ? '✓ Done Cropping' : '✂️ Interactive Crop'}
-            </Button>
-          </StExpander>
-
-          <StExpander label="📥 Export" isOpen={expanders.export} onToggle={() => setExpanders(p=>({...p, export:!p.export}))}>
-            <Button onClick={downloadResult} className="w-full py-3 text-sm">Download Result</Button>
-          </StExpander>
+          <div>
+            <h1 className="text-sm font-bold tracking-tight text-white">CHROMA STUDIO</h1>
+            <p className="text-[10px] text-zinc-500 font-medium uppercase tracking-widest">Team Composition v2.5</p>
+          </div>
         </div>
-      </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col relative overflow-hidden">
-        <header className="h-14 border-b border-[#31333f] px-8 flex items-center justify-between bg-[#0e1117] z-10">
-          <div className="flex items-center gap-2 text-sm">
-            <span className="text-gray-500 font-mono">st.</span>
-            <span className="font-semibold">ChromaKey Composer</span>
-          </div>
-          <div className={`text-[10px] px-2 py-1 rounded bg-[#ff4b4b] font-bold ${status === ProcessingStatus.IDLE ? 'opacity-30' : 'animate-pulse'}`}>
+        <div className="flex items-center gap-3">
+          <div className={`px-3 py-1 rounded-full border text-[10px] font-bold tracking-widest uppercase transition-all
+            ${status === ProcessingStatus.IDLE ? 'border-zinc-800 text-zinc-600' : 'border-indigo-500/50 text-indigo-400 animate-pulse'}`}>
             {status}
           </div>
-        </header>
+          <IconButton icon="📥" label="Export" onClick={downloadResult} variant="primary" />
+        </div>
+      </nav>
 
-        <div className="flex-1 p-10 flex flex-col items-center justify-center overflow-auto bg-checkered">
-          {!foregroundSrc ? (
-            <div className="text-center space-y-4 max-w-md">
-              <div className="text-6xl mb-4">📸</div>
-              <h2 className="text-2xl font-bold">Ready to take team photos?</h2>
-              <p className="text-gray-400 text-sm">Use the sidebar to capture a photo or upload an existing one. We'll automatically remove the green background for you.</p>
+      {/* Main Workspace */}
+      <main className="flex-1 relative flex items-center justify-center p-20 bg-studio">
+        {!foregroundSrc ? (
+          <div className="text-center animate-in fade-in zoom-in duration-500">
+            <div className="text-7xl mb-8 opacity-20">👤</div>
+            <h2 className="text-3xl font-bold text-white mb-2">No Subject Found</h2>
+            <p className="text-zinc-500 max-w-xs mx-auto mb-8">Start by taking a live photo or uploading a team member's portrait.</p>
+            <div className="flex justify-center gap-3">
+              <button 
+                onClick={() => setIsCameraActive(true)}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-xl font-bold shadow-xl shadow-indigo-600/20 transition-all active:scale-95"
+              >
+                📹 Open Camera
+              </button>
+              <label className="cursor-pointer bg-white/5 hover:bg-white/10 text-zinc-300 px-6 py-3 rounded-xl font-bold border border-white/5 transition-all">
+                📁 Upload File
+                <input type="file" className="hidden" onChange={e => handleFileUpload(e, true)} />
+              </label>
             </div>
-          ) : (
-            <div className="relative shadow-2xl border border-[#31333f] bg-black" style={{ transform: `scale(${viewportZoom})`, transition: 'transform 0.2s' }}>
-              <canvas ref={canvasRef} className="block max-w-[90vw] max-h-[70vh]" />
-              {status === ProcessingStatus.GENERATING_BG && (
-                <div className="absolute inset-0 bg-black/60 flex items-center justify-center backdrop-blur-sm">
-                   <div className="text-center font-bold text-sm tracking-widest animate-pulse">GENERATING BACKGROUND...</div>
+          </div>
+        ) : (
+          <div className="relative shadow-2xl border border-white/10 rounded-2xl overflow-hidden bg-black transition-transform duration-300" style={{ transform: `scale(${viewportZoom})` }}>
+            <canvas ref={canvasRef} className="block max-w-[85vw] max-h-[75vh]" />
+            {status === ProcessingStatus.GENERATING_BG && (
+              <div className="absolute inset-0 bg-zinc-950/80 backdrop-blur-md flex flex-col items-center justify-center p-8">
+                <div className="w-12 h-12 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4" />
+                <p className="text-sm font-bold text-indigo-400 tracking-widest uppercase animate-pulse text-center">Dreaming up your background...</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Camera Modal */}
+        {isCameraActive && (
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-2xl z-50 flex items-center justify-center">
+            <div className="w-full max-w-2xl p-4">
+              <div className="rounded-3xl overflow-hidden border border-white/10 bg-zinc-900 shadow-2xl">
+                <video ref={videoRef} autoPlay playsInline className="w-full aspect-video object-cover bg-black" />
+                <div className="p-8 flex justify-between items-center bg-zinc-950">
+                  <button onClick={() => setIsCameraActive(false)} className="text-zinc-500 hover:text-white font-bold px-4">Cancel</button>
+                  <button onClick={capturePhoto} className="w-16 h-16 rounded-full border-4 border-white flex items-center justify-center active:scale-90 transition-all">
+                    <div className="w-12 h-12 bg-white rounded-full" />
+                  </button>
+                  <div className="w-20" /> {/* Spacer */}
                 </div>
-              )}
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Floating Control Panel */}
+      <aside className={`fixed right-8 top-24 w-80 bg-zinc-950/80 backdrop-blur-2xl border border-white/10 rounded-3xl shadow-2xl transition-all duration-500 overflow-hidden
+        ${foregroundSrc ? 'translate-x-0 opacity-100' : 'translate-x-12 opacity-0 pointer-events-none'}`}>
+        
+        {/* Panel Tabs */}
+        <div className="flex border-b border-white/5">
+          {(['chroma', 'adjust', 'geo', 'bg'] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`flex-1 py-4 text-[10px] font-bold uppercase tracking-widest transition-all
+                ${activeTab === tab ? 'text-indigo-400 bg-indigo-500/10' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+              {tab === 'chroma' && 'Magic'}
+              {tab === 'adjust' && 'Color'}
+              {tab === 'geo' && 'Layout'}
+              {tab === 'bg' && 'Back'}
+            </button>
+          ))}
+        </div>
+
+        <div className="p-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
+          {activeTab === 'chroma' && (
+            <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-white/5 border border-white/5">
+                <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider">Key Color</span>
+                <input type="color" value={chroma.keyColor} onChange={e => setChroma(p=>({...p, keyColor:e.target.value}))} className="w-12 h-8 bg-transparent cursor-pointer" />
+              </div>
+              <ControlSlider label="Precision" value={chroma.similarity} min={0} max={1} step={0.01} onChange={v => setChroma(p=>({...p, similarity:v}))} />
+              <ControlSlider label="Feathering" value={chroma.smoothness} min={0} max={0.5} step={0.01} onChange={v => setChroma(p=>({...p, smoothness:v}))} />
+              <ControlSlider label="Despill" value={chroma.spill} min={0} max={0.5} step={0.01} onChange={v => setChroma(p=>({...p, spill:v}))} />
+            </div>
+          )}
+
+          {activeTab === 'adjust' && (
+            <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
+              <ControlSlider label="Exposure" value={adjust.exposure} min={-100} max={100} onChange={v=>setAdjust(p=>({...p, exposure:v}))} />
+              <ControlSlider label="Contrast" value={adjust.contrast} min={-100} max={100} onChange={v=>setAdjust(p=>({...p, contrast:v}))} />
+              <ControlSlider label="Vibrance" value={adjust.saturation} min={-100} max={100} onChange={v=>setAdjust(p=>({...p, saturation:v}))} />
+              <ControlSlider label="Temperature" value={adjust.warmth} min={-100} max={100} onChange={v=>setAdjust(p=>({...p, warmth:v}))} />
+            </div>
+          )}
+
+          {activeTab === 'geo' && (
+            <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
+              <ControlSlider label="Rotation" value={transform.rotate} min={-180} max={180} onChange={v=>setTransform(p=>({...p, rotate:v}))} />
+              <ControlSlider label="Size" value={transform.scale} min={0.2} max={3} step={0.01} onChange={v=>setTransform(p=>({...p, scale:v}))} />
+              <ControlSlider label="Horizon" value={transform.panX} min={-100} max={100} onChange={v=>setTransform(p=>({...p, panX:v}))} />
+              <ControlSlider label="Vertical" value={transform.panY} min={-100} max={100} onChange={v=>setTransform(p=>({...p, panY:v}))} />
+              <button 
+                onClick={() => setIsCropping(!isCropping)}
+                className={`w-full py-3 rounded-xl font-bold text-xs uppercase tracking-widest transition-all
+                  ${isCropping ? 'bg-indigo-600 text-white' : 'bg-white/5 text-zinc-400 border border-white/5 hover:bg-white/10'}`}
+              >
+                {isCropping ? '✓ Finalize Crop' : '✂️ Interactive Crop'}
+              </button>
+            </div>
+          )}
+
+          {activeTab === 'bg' && (
+            <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
+              <div className="space-y-3">
+                <label className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest">AI Backdrop Prompt</label>
+                <textarea 
+                  className="w-full h-32 bg-white/5 border border-white/5 rounded-2xl p-4 text-sm text-zinc-200 outline-none focus:border-indigo-500/50 transition-all resize-none"
+                  placeholder="Cinematic office with soft sunset lighting, bokeh, professional photography..."
+                  value={aiPrompt}
+                  onChange={e => setAiPrompt(e.target.value)}
+                />
+                <button 
+                  onClick={handleAiBg}
+                  disabled={status === ProcessingStatus.GENERATING_BG || !aiPrompt.trim()}
+                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-2xl font-bold text-xs uppercase tracking-widest transition-all shadow-xl shadow-indigo-600/20"
+                >
+                  ✨ Generate Background
+                </button>
+              </div>
+              <div className="pt-6 border-t border-white/5">
+                <label className="cursor-pointer w-full flex items-center justify-center py-4 bg-white/5 hover:bg-white/10 text-zinc-300 rounded-2xl font-bold text-xs uppercase tracking-widest border border-white/5 transition-all">
+                  📁 Custom Image
+                  <input type="file" className="hidden" onChange={e => handleFileUpload(e, false)} />
+                </label>
+              </div>
             </div>
           )}
         </div>
 
-        {/* View Controls */}
-        <div className="absolute bottom-6 right-6 flex items-center gap-2 bg-[#262730] p-1 rounded-full border border-[#31333f] z-20">
-           <button onClick={()=>setViewportZoom(z=>Math.max(0.1, z-0.1))} className="w-8 h-8 hover:bg-[#ff4b4b] rounded-full text-lg">-</button>
-           <span className="text-[10px] font-mono w-10 text-center">{Math.round(viewportZoom*100)}%</span>
-           <button onClick={()=>setViewportZoom(z=>Math.min(3, z+0.1))} className="w-8 h-8 hover:bg-[#ff4b4b] rounded-full text-lg">+</button>
+        {/* View Zoom Control */}
+        <div className="p-6 bg-zinc-950/50 border-t border-white/5 flex items-center gap-4">
+           <button onClick={()=>setViewportZoom(z=>Math.max(0.1, z-0.1))} className="text-zinc-500 hover:text-white p-2">➖</button>
+           <span className="flex-1 text-center font-mono text-xs text-indigo-400">{Math.round(viewportZoom*100)}%</span>
+           <button onClick={()=>setViewportZoom(z=>Math.min(3, z+0.1))} className="text-zinc-500 hover:text-white p-2">➕</button>
         </div>
-      </main>
+      </aside>
 
       <style>{`
-        .bg-checkered {
-          background-image: linear-gradient(45deg, #0e1117 25%, transparent 25%), linear-gradient(-45deg, #0e1117 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #0e1117 75%), linear-gradient(-45deg, transparent 75%, #0e1117 75%);
-          background-size: 20px 20px;
-          background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
-          background-color: #161b22;
+        .bg-studio {
+          background-color: #09090b;
+          background-image: 
+            radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
+            radial-gradient(at 50% 0%, hsla(225,39%,30%,0.1) 0, transparent 50%), 
+            radial-gradient(at 100% 0%, hsla(339,49%,30%,0.05) 0, transparent 50%);
         }
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b4d5a; border-radius: 2px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.05); border-radius: 20px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.1); }
+        
+        input[type='range']::-webkit-slider-thumb {
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          border: 2px solid #6366f1;
+          background: #09090b;
+          cursor: pointer;
+          -webkit-appearance: none;
+          box-shadow: 0 0 10px rgba(99, 102, 241, 0.4);
+        }
       `}</style>
     </div>
   );
